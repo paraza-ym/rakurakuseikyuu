@@ -70,7 +70,8 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
 - 提供形態：「サービス提供状況」「提供形態」欄に書かれた数字（1または2）をそのまま読み取る
 - 送迎往・復列に「1」「/」「✓」がある → 1、ない → 0
 - 時間は「10:20」「17:00」の形式
-- 受給者証番号はスペースを除去した数字のみ
+- 受給者証番号は「受給者証番号」欄に記載された利用者個人の番号。スペースを除去した数字のみ
+- 【重要】2150600183 は事業所番号であり受給者証番号ではない。この値が読み取れた場合は読み取りエラーとして扱い、正しい受給者証番号を再度探すこと
 - 保護者名は「（　様）」の括弧内の氏名"""
 
     response = client.messages.create(
@@ -87,6 +88,12 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
     if start == -1:
         raise ValueError(f"読み取りに失敗しました。写真をより鮮明に撮り直してください。")
     data = json.loads(text[start:end])
+    # 事業所番号を受給者証番号として誤読した場合はエラー
+    if str(data.get("受給者証番号","")).replace(" ","") == JIGYOSHO["number"]:
+        raise ValueError(
+            f"受給者証番号の読み取りに失敗しました（事業所番号と混同されました）。"
+            f"「{data.get('児童名','')}」さんの受給者証番号欄を確認して手動入力してください。"
+        )
     data["算定日数"]   = sum(1 for r in data["実績"] if not r["欠席"])
     data["送迎往合計"] = sum(r["送迎往"] for r in data["実績"])
     data["送迎復合計"] = sum(r["送迎復"] for r in data["実績"])
@@ -106,7 +113,9 @@ def save_meisai(data):
     csv_path = get_csv_path(ym)
     if csv_path.exists():
         df = pd.read_csv(csv_path, dtype=str)
-        df = df[df["受給者証番号"] != str(data["受給者証番号"])]
+        # 受給者証番号＋児童名の組み合わせで上書き（同番号でも別の子は消えない）
+        same = (df["受給者証番号"] == str(data["受給者証番号"])) & (df["児童名"] == data["児童名"])
+        df = df[~same]
     else:
         df = pd.DataFrame(columns=MEISAI_COLS)
     rows = []
@@ -459,32 +468,8 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div style="font-size:13px;font-weight:600;color:#1C1C1E;margin-bottom:6px;">API Key</div>',
-                unsafe_allow_html=True)
-    api_key = st.text_input("", type="password",
-                             value=st.session_state.get("api_key",""),
-                             placeholder="sk-ant-api03-...",
-                             label_visibility="collapsed")
-    if api_key:
-        st.session_state["api_key"] = api_key
-
-    if api_key:
-        st.markdown('<div style="font-size:13px;color:#34C759;margin:6px 0 12px 0;">● 設定済み</div>',
-                    unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="font-size:13px;color:#FF9500;margin:6px 0 4px 0;">● 未設定</div>',
-                    unsafe_allow_html=True)
-        st.caption("使い始める前にAPIキーを入力してください")
-
-    if api_key and not API_KEY_FILE.exists():
-        if st.checkbox("次回から自動入力する"):
-            API_KEY_FILE.write_text(api_key)
-    elif API_KEY_FILE.exists():
-        st.caption("保存済み")
-        if st.button("削除"):
-            API_KEY_FILE.unlink()
-            st.session_state["api_key"] = ""
-            st.rerun()
+    # APIキーは Streamlit Secrets から自動取得（UIには表示しない）
+    api_key = st.session_state.get("api_key", "")
 
     st.divider()
 
@@ -512,20 +497,6 @@ with st.sidebar:
 page_title("らくらく請求", "実績記録票を写真で撮るだけで、国保連への提出データを自動で作ります")
 st.divider()
 
-# APIキー未設定の案内
-if not api_key:
-    st.markdown("""
-    <div style="background:#FFFBEB;border-radius:16px;padding:24px 28px;
-         border:1.5px solid #FCD34D;margin-bottom:8px;">
-        <div style="font-size:17px;font-weight:700;color:#92400E;margin-bottom:8px;">
-            最初にAPIキーの設定が必要です
-        </div>
-        <div style="font-size:14px;color:#78350F;line-height:1.8;">
-            左のサイドバーに「Anthropic API Key」を入力してください。<br>
-            キーは <b>sk-ant-api03-</b> から始まる文字列です。
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # ── タブ ─────────────────────────────────────────────────
 tab1, tab2, tab3 = st.tabs(["① 読み取り", "② 内容確認", "③ CSV生成"])
