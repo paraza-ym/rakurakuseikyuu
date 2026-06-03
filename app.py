@@ -132,7 +132,7 @@ def load_meisai(ym):
     p = get_csv_path(ym)
     if not p.exists():
         return pd.DataFrame(columns=MEISAI_COLS)
-    return pd.read_csv(p, dtype=str)
+    return pd.read_csv(p, dtype=str, keep_default_na=False)
 
 def check_duplicate(data):
     csv_path = get_csv_path(data["サービス提供年月"])
@@ -233,8 +233,10 @@ def _next_month(ym):
     return f"{y}{m:02d}"
 
 def _hhmm(t):
-    s = str(t or "").replace(":", "").strip()
-    return s.zfill(4) if s else "0000"
+    s = str(t).replace(":", "").strip()
+    if s in ("", "nan", "None"):
+        return "0000"
+    return s.zfill(4)
 
 def _to_min(hhmm):
     s = str(hhmm or "").replace(":", "").strip().zfill(4)
@@ -281,9 +283,9 @@ def generate_kokuhoren_csv(ym):
             d[7]=jukyu; d[8]=shoshiki; d[10]=str(int(dr["日_num"]))
             d[15]=s; d[16]=e
             d[17]=_min_to_hhmm(_to_min(e)-_to_min(s),4) if sansei else "0000"
-            d[22]=str(int(float(dr["送迎往"] or 0)))
-            d[23]=str(int(float(dr["送迎復"] or 0)))
-            k=str(dr["提供形態"] or "").strip()
+            d[22]=str(int(float(dr["送迎往"]) if str(dr["送迎往"]).strip() not in ("","nan") else 0))
+            d[23]=str(int(float(dr["送迎復"]) if str(dr["送迎復"]).strip() not in ("","nan") else 0))
+            k = str(dr["提供形態"]).strip() if str(dr["提供形態"]).strip() not in ("","nan","None") else ""
             d[35]="0" if is_jihatsu else (k if k else "1")
             lines.append(_line(d, DETAIL_QUOTE))
     ctrl = _line(["1","1","0",str(len(lines)),JIGYOSHO["data_type"],"0",
@@ -758,27 +760,9 @@ with tab2:
 # ============================================================
 with tab3:
     from billing_check import run_billing_checks, detect_latest_ym
-    from discord_notify import send_check_result, load_webhook_url, save_webhook_url
 
     section_title("請求前チェック", "CSV生成の前に、入力漏れ・設定ミスがないか自動で確認します")
 
-    # Webhook URL 設定
-    with st.expander("Discord通知の設定（初回のみ）"):
-        current_url = load_webhook_url()
-        wh_input = st.text_input(
-            "Discord Webhook URL",
-            value=current_url,
-            type="password",
-            placeholder="https://discord.com/api/webhooks/...",
-            help="Discordのチャンネル設定 → 連携サービス → ウェブフック から取得"
-        )
-        if st.button("保存する", key="save_webhook"):
-            save_webhook_url(wh_input)
-            st.success("Webhook URLを保存しました")
-
-    st.divider()
-
-    # 対象月の選択
     check_csv_files = sorted(DATA_DIR.glob("実績明細_*.csv"), reverse=True)
     check_yms = [f.stem.replace("実績明細_", "") for f in check_csv_files]
 
@@ -790,11 +774,7 @@ with tab3:
             format_func=lambda x: f"{x[:4]}年{x[4:]}月"
         )
 
-        col_btn, col_disc = st.columns([2, 1])
-        run_check = col_btn.button("チェックを実行する", type="primary", key="run_check")
-        send_discord_btn = col_disc.button("Discordに送信", key="send_discord")
-
-        if run_check or send_discord_btn:
+        if st.button("チェックを実行する", type="primary", key="run_check"):
             with st.spinner("チェック中..."):
                 check_results = run_billing_checks(selected_check_ym)
 
@@ -839,15 +819,8 @@ with tab3:
                     <div style="font-size:13px;color:#3C3C43;margin-top:4px;">{r['msg']}</div>
                 </div>""", unsafe_allow_html=True)
 
-            if send_discord_btn:
-                ok, msg = send_check_result(selected_check_ym, check_results)
-                if ok:
-                    st.success("Discordに送信しました")
-                else:
-                    st.error(f"Discord送信失敗: {msg}")
-
-            st.session_state["last_check_ym"]      = selected_check_ym
-            st.session_state["last_check_errors"]  = len(errors)
+            st.session_state["last_check_ym"]       = selected_check_ym
+            st.session_state["last_check_errors"]   = len(errors)
             st.session_state["last_check_complete"] = True
 
 
@@ -885,17 +858,22 @@ with tab4:
         summary2 = get_summary(selected_ym2)
         master   = load_master()
 
+        # 選択月に存在する子だけ表示（過去の誤読み等を除外）
         if not summary2.empty:
+            month_jukyu = summary2["受給者証番号"].astype(str).tolist()
+            master_display = master[master["受給者証番号"].astype(str).isin(month_jukyu)].copy()
             for _, r in summary2.iterrows():
-                if str(r["受給者証番号"]) not in master["受給者証番号"].astype(str).values:
-                    master = pd.concat([master, pd.DataFrame([{
+                if str(r["受給者証番号"]) not in master_display["受給者証番号"].astype(str).values:
+                    master_display = pd.concat([master_display, pd.DataFrame([{
                         "受給者証番号": str(r["受給者証番号"]), "児童名": r["児童名"],
                         "市町村番号": DEFAULT_MUNI, "様式種別番号": DEFAULT_SHOSHIKI,
                         "算定時間記載": DEFAULT_SANSEI,
                     }])], ignore_index=True)
+        else:
+            master_display = pd.DataFrame(columns=MASTER_COLS)
 
         master_edited = st.data_editor(
-            master, use_container_width=True, hide_index=True, key="master_editor",
+            master_display, use_container_width=True, hide_index=True, key="master_editor",
             column_config={
                 "市町村番号": st.column_config.TextColumn(
                     "市町村番号", help="受給者証に記載の6桁（例：212019）", required=True),
@@ -907,10 +885,23 @@ with tab4:
                     help="児発で算定時間を記載する場合のみ「あり」", required=True),
             }
         )
-        if st.button("内容を保存する"):
-            save_master(master_edited[MASTER_COLS])
-            st.success("保存しました")
-            st.rerun()
+        col_save2, col_reset = st.columns([2, 1])
+        with col_save2:
+            if st.button("内容を保存する"):
+                # 今月分を更新しつつ、他の月のデータは保持する
+                full = load_master()
+                edited_jukyu = master_edited[MASTER_COLS]["受給者証番号"].astype(str).tolist()
+                full = full[~full["受給者証番号"].astype(str).isin(edited_jukyu)]
+                full = pd.concat([full, master_edited[MASTER_COLS]], ignore_index=True)
+                save_master(full)
+                st.success("保存しました")
+                st.rerun()
+        with col_reset:
+            if st.button("マスターをリセット", type="secondary"):
+                if MASTER_PATH.exists():
+                    MASTER_PATH.unlink()
+                st.success("リセットしました")
+                st.rerun()
 
         st.divider()
 
