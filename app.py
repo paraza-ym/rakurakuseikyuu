@@ -285,8 +285,9 @@ def generate_kokuhoren_csv(ym):
             d[17]=_min_to_hhmm(_to_min(e)-_to_min(s),4) if sansei else "0000"
             d[22]=str(int(float(dr["送迎往"]) if str(dr["送迎往"]).strip() not in ("","nan") else 0))
             d[23]=str(int(float(dr["送迎復"]) if str(dr["送迎復"]).strip() not in ("","nan") else 0))
-            k = str(dr["提供形態"]).strip() if str(dr["提供形態"]).strip() not in ("","nan","None") else ""
-            d[35]="0" if is_jihatsu else (k if k else "1")
+            katachi = str(dr["提供形態"]).strip()
+            k = katachi if katachi in ("1","2") else "1"
+            d[35]="0" if is_jihatsu else k
             lines.append(_line(d, DETAIL_QUOTE))
     ctrl = _line(["1","1","0",str(len(lines)),JIGYOSHO["data_type"],"0",
                   JIGYOSHO["number"],"0","1",proc_ym,""], CTRL_QUOTE)
@@ -1000,4 +1001,3 @@ with tab4:
                         </div>
                         <div style="font-size:13px;color:#7F1D1D;">{e}</div>
                     </div>
-                    """, unsafe_allow_html=True)
