@@ -41,16 +41,15 @@ def pdf_to_png(pdf_bytes):
 def ocr_jisseki(image_bytes, mime_type, api_key):
     client = anthropic.Anthropic(api_key=api_key)
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-    prompt = """これは放課後等デイサービスの「提供実績記録票」（手書き）です。
-以下の情報を正確にJSON形式で抽出してください。
+    prompt = """これは放課後等デイサービスの「提供実績記録票」です。
+記録票の情報をすべて抽出してください。
 
 【出力形式】以下のJSONのみ返してください（説明文不要）：
 {
-  "受給者証番号": "数字のみ10桁",
-  "児童名": "漢字氏名",
-  "保護者名": "漢字氏名（保護者欄）",
   "サービス提供年月": "YYYYMM形式（例：令和7年4月→202504）",
-  "契約支給量": 数字,
+  "受給者証番号": "10桁の番号（文字列）",
+  "児童名": "お子さんの名前",
+  "保護者名": "保護者の名前またはnull",
   "実績": [
     {
       "日": 数字,
@@ -67,12 +66,9 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
 【読み取りルール】
 - 「欠」「欠席」と書かれた日 → 欠席=true、提供形態/時間=null
 - 空欄の日（記録なし）→ 実績配列に含めない
-- 提供形態：「サービス提供状況」「提供形態」欄に書かれた数字（1または2）をそのまま読み取る
+- 提供形態：「サービス提供状況」「提供形態」欄の数字（1または2）をそのまま読み取る
 - 送迎往・復列に「1」「/」「✓」がある → 1、ない → 0
-- 時間は「10:20」「17:00」の形式
-- 受給者証番号は「受給者証番号」欄に記載された利用者個人の番号。スペースを除去した数字のみ
-- 【重要】2150600183 は事業所番号であり受給者証番号ではない。この値が読み取れた場合は読み取りエラーとして扱い、正しい受給者証番号を再度探すこと
-- 保護者名は「（　様）」の括弧内の氏名"""
+- 時間は「10:20」「17:00」の形式"""
 
     response = client.messages.create(
         model="claude-opus-4-5",
@@ -86,14 +82,9 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
     start = text.find("{")
     end   = text.rfind("}") + 1
     if start == -1:
-        raise ValueError(f"読み取りに失敗しました。写真をより鮮明に撮り直してください。")
+        raise ValueError("読み取りに失敗しました。写真をより鮮明に撮り直してください。")
     data = json.loads(text[start:end])
-    # 事業所番号を受給者証番号として誤読した場合はエラー
-    if str(data.get("受給者証番号","")).replace(" ","") == JIGYOSHO["number"]:
-        raise ValueError(
-            f"受給者証番号の読み取りに失敗しました（事業所番号と混同されました）。"
-            f"「{data.get('児童名','')}」さんの受給者証番号欄を確認して手動入力してください。"
-        )
+    data["保護者名"]   = data.get("保護者名") or ""
     data["算定日数"]   = sum(1 for r in data["実績"] if not r["欠席"])
     data["送迎往合計"] = sum(r["送迎往"] for r in data["実績"])
     data["送迎復合計"] = sum(r["送迎復"] for r in data["実績"])
@@ -142,6 +133,25 @@ def load_meisai(ym):
     if not p.exists():
         return pd.DataFrame(columns=MEISAI_COLS)
     return pd.read_csv(p, dtype=str)
+
+def check_duplicate(data):
+    csv_path = get_csv_path(data["サービス提供年月"])
+    if not csv_path.exists():
+        return False
+    df = pd.read_csv(csv_path, dtype=str)
+    return ((df["受給者証番号"] == str(data["受給者証番号"])) &
+            (df["児童名"] == data["児童名"])).any()
+
+def delete_child(ym, jukyu_no):
+    csv_path = get_csv_path(ym)
+    if not csv_path.exists():
+        return
+    df = pd.read_csv(csv_path, dtype=str)
+    df = df[df["受給者証番号"] != str(jukyu_no)]
+    if df.empty:
+        csv_path.unlink()
+    else:
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
 # ============================================================
 # 児童マスター
@@ -423,6 +433,26 @@ def card_ok(name, jukyu, ym, days, og, ret):
         </div>
     </div>""", unsafe_allow_html=True)
 
+def card_overwrite(name, jukyu, ym, days, og, ret):
+    st.markdown(f"""
+    <div style="background:#FFFBEB;border-radius:14px;padding:16px 20px;margin:8px 0;
+         box-shadow:0 1px 4px rgba(0,0,0,0.07);">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <div style="width:10px;height:10px;border-radius:50%;
+                 background:#FF9500;flex-shrink:0;"></div>
+            <div>
+                <div style="font-size:15px;font-weight:600;color:#1C1C1E;">
+                    {name}　<span style="font-size:12px;font-weight:500;color:#FF9500;">
+                    ⚠ 同じ月のデータが既にありました。上書きしました。</span>
+                </div>
+                <div style="font-size:13px;color:#8E8E93;margin-top:4px;">
+                    受給者証 {jukyu}　·　{ym[:4]}年{ym[4:]}月　·　{days}日
+                    　·　送迎 往{og} / 復{ret}
+                </div>
+            </div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
 def card_err(label, msg):
     st.markdown(f"""
     <div style="background:#FFFFFF;border-radius:14px;padding:16px 20px;margin:8px 0;
@@ -499,7 +529,7 @@ st.divider()
 
 
 # ── タブ ─────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["① 読み取り", "② 内容確認", "③ CSV生成"])
+tab1, tab2, tab3, tab4 = st.tabs(["① 読み取り", "② 内容確認", "③ 請求前チェック", "④ CSV生成"])
 
 
 # ============================================================
@@ -590,38 +620,35 @@ with tab1:
                                   text=f"読み取り中... {idx+1}/{len(all_jobs)}件")
                 try:
                     data = ocr_jisseki(img_bytes, mime, api_key)
+                    is_dup = check_duplicate(data)
                     save_meisai(data)
-                    results.append(("ok", data, label))
+                    status = "overwrite" if is_dup else "ok"
+                    results.append({"status": status, "label": label, "data": data})
                 except Exception as e:
-                    results.append(("err", str(e), label))
+                    results.append({"status": "err", "label": label, "error": str(e)})
 
             progress.empty()
 
-            ok_count  = sum(1 for r in results if r[0]=="ok")
-            err_count = len(results) - ok_count
+            ok_results  = [r for r in results if r["status"] in ("ok", "overwrite")]
+            err_results = [r for r in results if r["status"] == "err"]
 
-            if ok_count:
-                st.markdown(f"""
-                <div style="background:#F0FFF4;border-radius:14px;padding:18px 22px;
-                     margin:16px 0 8px 0;border-left:3px solid #34C759;">
-                    <div style="font-size:16px;font-weight:700;color:#166534;">
-                        {ok_count}件の読み取りが完了しました
-                    </div>
-                    <div style="font-size:13px;color:#166534;margin-top:4px;opacity:0.8;">
-                        {f"{err_count}件は読み取れませんでした" if err_count else "すべて正常に読み取れました"}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            for status, data_or_err, label in results:
-                if status == "ok":
-                    d = data_or_err
+            for r in ok_results:
+                d = r["data"]
+                if r["status"] == "overwrite":
+                    card_overwrite(d["児童名"], d["受給者証番号"], d["サービス提供年月"],
+                                   d["算定日数"], d["送迎往合計"], d["送迎復合計"])
+                else:
                     card_ok(d["児童名"], d["受給者証番号"], d["サービス提供年月"],
                             d["算定日数"], d["送迎往合計"], d["送迎復合計"])
-                else:
-                    card_err(label, str(data_or_err))
+            for r in err_results:
+                card_err(r["label"], r["error"])
 
-            if ok_count:
+            if ok_results:
+                overwrites = sum(1 for r in ok_results if r["status"] == "overwrite")
+                msg = f"{len(ok_results)}件を保存しました"
+                if overwrites:
+                    msg += f"（うち{overwrites}件は上書き）"
+                st.success(msg)
                 next_step_hint("「② 内容確認」タブで読み取り結果を確認してください")
 
     st.divider()
@@ -691,7 +718,16 @@ with tab2:
             st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
             st.markdown('<div style="font-size:14px;font-weight:600;color:#1C1C1E;'
                         'margin-bottom:8px;">お子さんごとのまとめ</div>', unsafe_allow_html=True)
-            st.dataframe(summary, use_container_width=True, hide_index=True)
+            for _, r in summary.iterrows():
+                col_info, col_del = st.columns([6, 1])
+                with col_info:
+                    card_ok(r["児童名"], r["受給者証番号"], selected_ym,
+                            int(r["算定日数"]), int(r["送迎往合計"]), int(r["送迎復合計"]))
+                with col_del:
+                    st.markdown('<div style="height:14px;"></div>', unsafe_allow_html=True)
+                    if st.button("削除", key=f"del_{r['受給者証番号']}_{selected_ym}"):
+                        delete_child(selected_ym, r["受給者証番号"])
+                        st.rerun()
 
         st.divider()
         st.markdown('<div style="font-size:14px;font-weight:600;color:#1C1C1E;'
@@ -700,7 +736,7 @@ with tab2:
 
         df = load_meisai(selected_ym)
         if not df.empty:
-            children  = ["全員表示"] + sorted(df["児童名"].unique().tolist())
+            children  = ["全員表示"] + sorted(df["児童名"].dropna().unique().tolist())
             sel_child = st.selectbox("", children, label_visibility="collapsed")
             show_df   = df if sel_child=="全員表示" else df[df["児童名"]==sel_child]
             edited    = st.data_editor(show_df, use_container_width=True, hide_index=True)
@@ -718,9 +754,107 @@ with tab2:
 
 
 # ============================================================
-# TAB 3 — CSV生成
+# TAB 3 — 請求前チェック
 # ============================================================
 with tab3:
+    from billing_check import run_billing_checks, detect_latest_ym
+    from discord_notify import send_check_result, load_webhook_url, save_webhook_url
+
+    section_title("請求前チェック", "CSV生成の前に、入力漏れ・設定ミスがないか自動で確認します")
+
+    # Webhook URL 設定
+    with st.expander("Discord通知の設定（初回のみ）"):
+        current_url = load_webhook_url()
+        wh_input = st.text_input(
+            "Discord Webhook URL",
+            value=current_url,
+            type="password",
+            placeholder="https://discord.com/api/webhooks/...",
+            help="Discordのチャンネル設定 → 連携サービス → ウェブフック から取得"
+        )
+        if st.button("保存する", key="save_webhook"):
+            save_webhook_url(wh_input)
+            st.success("Webhook URLを保存しました")
+
+    st.divider()
+
+    # 対象月の選択
+    check_csv_files = sorted(DATA_DIR.glob("実績明細_*.csv"), reverse=True)
+    check_yms = [f.stem.replace("実績明細_", "") for f in check_csv_files]
+
+    if not check_yms:
+        empty_state("まだデータがありません", "「① 読み取り」タブで実績記録票をアップロードしてください")
+    else:
+        selected_check_ym = st.selectbox(
+            "チェックする月を選んでください", check_yms, key="check_ym",
+            format_func=lambda x: f"{x[:4]}年{x[4:]}月"
+        )
+
+        col_btn, col_disc = st.columns([2, 1])
+        run_check = col_btn.button("チェックを実行する", type="primary", key="run_check")
+        send_discord_btn = col_disc.button("Discordに送信", key="send_discord")
+
+        if run_check or send_discord_btn:
+            with st.spinner("チェック中..."):
+                check_results = run_billing_checks(selected_check_ym)
+
+            errors = [r for r in check_results if r["status"] == "error"]
+            warns  = [r for r in check_results if r["status"] == "warn"]
+
+            if errors:
+                st.markdown(f"""
+                <div style="background:#FEF2F2;border-radius:14px;padding:18px 22px;
+                     margin:16px 0;border-left:3px solid #FF3B30;">
+                    <div style="font-size:16px;font-weight:700;color:#991B1B;">
+                        ❌ エラー {len(errors)}件 — CSV生成前に修正してください
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            elif warns:
+                st.markdown(f"""
+                <div style="background:#FFFBEB;border-radius:14px;padding:18px 22px;
+                     margin:16px 0;border-left:3px solid #FF9500;">
+                    <div style="font-size:16px;font-weight:700;color:#92400E;">
+                        ⚠️ 注意 {len(warns)}件 — 確認のうえCSV生成へ進んでください
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="background:#F0FFF4;border-radius:14px;padding:18px 22px;
+                     margin:16px 0;border-left:3px solid #34C759;">
+                    <div style="font-size:16px;font-weight:700;color:#166534;">
+                        ✅ 問題なし — 「④ CSV生成」へ進んでください
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            status_icon = {"ok": "✅", "warn": "⚠️", "error": "❌"}
+            for r in check_results:
+                bg = {"ok": "#F0FFF4", "warn": "#FFFBEB", "error": "#FEF2F2"}[r["status"]]
+                bc = {"ok": "#34C759", "warn": "#FF9500", "error": "#FF3B30"}[r["status"]]
+                st.markdown(f"""
+                <div style="background:{bg};border-radius:12px;padding:14px 18px;
+                     margin:6px 0;border-left:3px solid {bc};">
+                    <div style="font-size:14px;font-weight:600;color:#1C1C1E;">
+                        {status_icon[r['status']]} {r['name']}
+                    </div>
+                    <div style="font-size:13px;color:#3C3C43;margin-top:4px;">{r['msg']}</div>
+                </div>""", unsafe_allow_html=True)
+
+            if send_discord_btn:
+                ok, msg = send_check_result(selected_check_ym, check_results)
+                if ok:
+                    st.success("Discordに送信しました")
+                else:
+                    st.error(f"Discord送信失敗: {msg}")
+
+            st.session_state["last_check_ym"]      = selected_check_ym
+            st.session_state["last_check_errors"]  = len(errors)
+            st.session_state["last_check_complete"] = True
+
+
+# ============================================================
+# TAB 4 — CSV生成
+# ============================================================
+with tab4:
     section_title("CSVを作って提出する",
                   "3つのステップで国保連に提出するCSVファイルを作ります")
 
