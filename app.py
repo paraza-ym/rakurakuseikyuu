@@ -6,6 +6,8 @@ import base64
 import json
 from pathlib import Path
 
+import math
+
 import anthropic
 import fitz
 import pandas as pd
@@ -22,7 +24,7 @@ APP_VERSION  = "v1.3"
 MASTER_PATH  = DATA_DIR / "児童マスター.csv"
 MASTER_COLS  = ["受給者証番号", "児童名", "市町村番号", "様式種別番号", "算定時間記載"]
 MEISAI_COLS  = ["サービス提供年月", "受給者証番号", "児童名", "保護者名",
-                "日", "提供形態", "開始時間", "終了時間", "送迎往", "送迎復", "状況"]
+                "日", "提供形態", "開始時間", "終了時間", "算定時間数", "送迎往", "送迎復", "状況"]
 DEFAULT_MUNI     = "212019"
 DEFAULT_SHOSHIKI = "0501"
 DEFAULT_SANSEI   = "なし"
@@ -61,11 +63,15 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
   ]
 }
 
+【フォームの列構成】
+日付 | サービス提供の状況 | 提供形態 | 開始時間 | 終了時間 | 算定時間数 | 送迎往 | 送迎復 | …
+
 【読み取りルール】
-- 「欠」「欠席」と書かれた日 → 欠席=true、提供形態/時間=null
-- 空欄の日（記録なし）→ 実績配列に含めない
-- 提供形態：「サービス提供状況」「提供形態」欄の数字（1または2）をそのまま読み取る
-- 送迎往・復列に「1」「/」「✓」がある → 1、ない → 0
+- 「サービス提供の状況」欄に「欠席」「欠」と書かれている日 → 欠席=true、提供形態/時間=null、送迎=0
+- 「サービス提供の状況」欄が空欄 かつ 提供形態も空欄の日 → 実績配列に含めない（利用なし）
+- 「サービス提供の状況」欄に数字がある、または提供形態に1か2がある日 → 欠席=false
+- 提供形態：1（短時間）または2（長時間）をそのまま読み取る。空欄の場合はnull
+- 送迎往・復：「1」「○」「✓」がある → 1、ない・空欄 → 0
 - 時間は「10:20」「17:00」の形式"""
 
     response = client.messages.create(
@@ -91,6 +97,16 @@ def ocr_jisseki(image_bytes, mime_type, api_key):
 # ============================================================
 # データ管理
 # ============================================================
+def calc_santei_jikan(start_str, end_str):
+    """開始・終了時間から算定時間数を計算（30分=0.5、以降15分刻みで+0.25）"""
+    def to_min(t):
+        s = str(t).replace(":", "").strip().zfill(4)
+        return int(s[:2]) * 60 + int(s[2:]) if s.isdigit() else 0
+    total = to_min(end_str) - to_min(start_str)
+    if total < 30:
+        return 0.0
+    return math.ceil(total / 15) * 0.25
+
 def _read_csv(path, cols):
     if not Path(path).exists():
         return pd.DataFrame(columns=cols)
@@ -104,7 +120,14 @@ def get_meisai_months():
             for f in sorted(DATA_DIR.glob("実績明細_*.csv"), reverse=True)]
 
 def load_meisai(ym):
-    return _read_csv(get_csv_path(ym), MEISAI_COLS)
+    df = _read_csv(get_csv_path(ym), MEISAI_COLS)
+    if "算定時間数" not in df.columns:
+        df["算定時間数"] = df.apply(
+            lambda r: str(calc_santei_jikan(r["開始時間"], r["終了時間"]))
+                      if r.get("状況") == "提供" else "",
+            axis=1,
+        )
+    return df
 
 def save_meisai(data):
     ym       = data["サービス提供年月"]
@@ -119,10 +142,12 @@ def save_meisai(data):
             "児童名":           data["児童名"],
             "保護者名":         data["保護者名"],
             "日":               r["日"],
-            "提供形態":         "" if r["欠席"] else str(r["提供形態"] or ""),
-            "開始時間":         "" if r["欠席"] else str(r["開始時間"] or ""),
-            "終了時間":         "" if r["欠席"] else str(r["終了時間"] or ""),
-            "送迎往":           r["送迎往"],
+            "提供形態":   "" if r["欠席"] else str(r["提供形態"] or ""),
+            "開始時間":   "" if r["欠席"] else str(r["開始時間"] or ""),
+            "終了時間":   "" if r["欠席"] else str(r["終了時間"] or ""),
+            "算定時間数": "" if r["欠席"] else str(calc_santei_jikan(
+                              r["開始時間"] or "", r["終了時間"] or "")),
+            "送迎往":     r["送迎往"],
             "送迎復":           r["送迎復"],
             "状況":             "欠席" if r["欠席"] else "提供",
         }
@@ -477,6 +502,24 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.divider()
+    with st.expander("児童マスターのバックアップ"):
+        st.caption("コンテナ停止後の復元用に手元に保存しておいてください")
+        if MASTER_PATH.exists():
+            st.download_button(
+                "マスターをダウンロード",
+                data=MASTER_PATH.read_bytes(),
+                file_name="児童マスター.csv",
+                mime="text/csv",
+            )
+        else:
+            st.caption("まだマスターデータがありません")
+        uploaded_master = st.file_uploader("マスターを復元（CSVをアップロード）",
+                                           type="csv", key="master_upload")
+        if uploaded_master:
+            save_master(pd.read_csv(uploaded_master, dtype=str, keep_default_na=False))
+            st.success("復元しました")
+            st.rerun()
+
     with st.expander("データ管理"):
         st.caption("全データを削除してまっさらにします")
         months = get_meisai_months()
@@ -856,4 +899,3 @@ with tab4:
                     alert("ok", "CSVファイルが作成されました。「ダウンロードする」ボタンで保存してください。")
                 except Exception as e:
                     alert("error", f"エラーが発生しました：{e}")
-
