@@ -477,6 +477,20 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.divider()
+    with st.expander("データ管理"):
+        st.caption("全データを削除してまっさらにします")
+        months = get_meisai_months()
+        if months:
+            st.caption(f"保存中：{', '.join(m[:4]+'年'+m[4:]+'月' for m in months)}")
+        if st.button("全データをリセット", type="secondary", key="reset_all"):
+            for f in DATA_DIR.glob("実績明細_*.csv"):
+                f.unlink()
+            if MASTER_PATH.exists():
+                MASTER_PATH.unlink()
+            st.success("リセットしました")
+            st.rerun()
+
+    st.divider()
     st.markdown(f'<div style="font-size:11px;color:#C7C7CC;">パラザ合同会社　{APP_VERSION}</div>',
                 unsafe_allow_html=True)
 
