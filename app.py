@@ -706,14 +706,14 @@ with tab2:
             st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
             st.markdown('<div style="font-size:14px;font-weight:600;color:#1C1C1E;'
                         'margin-bottom:8px;">お子さんごとのまとめ</div>', unsafe_allow_html=True)
-            for _, r in summary.iterrows():
+            for idx, r in summary.iterrows():
                 col_info, col_del = st.columns([6, 1])
                 with col_info:
                     card_ok(r["児童名"], r["受給者証番号"], selected_ym,
                             int(r["算定日数"]), int(r["送迎往合計"]), int(r["送迎復合計"]))
                 with col_del:
                     st.markdown('<div style="height:14px;"></div>', unsafe_allow_html=True)
-                    if st.button("削除", key=f"del_{r['受給者証番号']}_{selected_ym}"):
+                    if st.button("削除", key=f"del_{idx}_{r['受給者証番号']}_{selected_ym}"):
                         delete_child(selected_ym, r["受給者証番号"])
                         st.rerun()
 
