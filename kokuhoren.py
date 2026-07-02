@@ -515,7 +515,7 @@ def render(settings):
 
 
     # ── タブ ─────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs(["① 読み取り", "② 内容確認", "③ 請求前チェック", "④ CSV生成"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["① 読み取り", "② 内容確認", "③ 請求前チェック", "④ CSV生成", "⑤ 児童マスター"])
 
 
     # ============================================================
@@ -864,4 +864,95 @@ def render(settings):
                         alert("ok", "CSVファイルが作成されました。「ダウンロードする」ボタンで保存してください。")
                     except Exception as e:
                         alert("error", f"エラーが発生しました：{e}")
+
+    # ============================================================
+    # TAB 5 — 児童マスター管理
+    # ============================================================
+    with tab5:
+        section_title("児童マスター管理", "受給者証番号・児童名・市町村番号などを登録・編集できます")
+
+        master_all = load_master()
+
+        with st.expander("＋ 新しいお子さんを追加する", expanded=master_all.empty):
+            with st.form("add_child_form"):
+                c1, c2 = st.columns(2)
+                new_jukyu  = c1.text_input("受給者証番号（10桁）", placeholder="2010089882")
+                new_name   = c2.text_input("児童名", placeholder="山田 太郎")
+                c3, c4, c5_col = st.columns(3)
+                new_muni   = c3.text_input("市町村番号（6桁）", value=DEFAULT_MUNI,
+                                           help="受給者証に記載の6桁（例：212019）")
+                new_shoshi = c4.selectbox("様式種別番号", options=["0501", "0301"],
+                                          help="放デイ＝0501　児発＝0301")
+                new_sansei = c5_col.selectbox("算定時間記載", options=["なし", "あり"],
+                                              help="児発で算定時間を記載する場合のみ「あり」")
+                submitted = st.form_submit_button("追加する", type="primary")
+
+            if submitted:
+                if not new_jukyu.strip() or not new_name.strip():
+                    st.error("受給者証番号と児童名は必須です")
+                elif new_jukyu.strip() in load_master()["受給者証番号"].values:
+                    st.error(f"受給者証番号 {new_jukyu.strip()} はすでに登録されています")
+                else:
+                    m = load_master()
+                    new_row = pd.DataFrame([{
+                        "受給者証番号": new_jukyu.strip(),
+                        "児童名":       new_name.strip(),
+                        "市町村番号":   new_muni.strip(),
+                        "様式種別番号": new_shoshi,
+                        "算定時間記載": new_sansei,
+                    }])
+                    save_master(pd.concat([m, new_row], ignore_index=True))
+                    st.success(f"{new_name.strip()}さんを追加しました")
+                    st.rerun()
+
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+
+        master_all = load_master()
+        if master_all.empty:
+            empty_state("まだ登録されていません", "上の「＋ 新しいお子さんを追加する」から登録してください")
+        else:
+            st.markdown(f'<div style="font-size:14px;font-weight:600;color:#1C1C1E;margin-bottom:8px;">'
+                        f'登録済み　{len(master_all)}名</div>', unsafe_allow_html=True)
+            st.caption("表のセルをクリックすると直接修正できます。修正後は「変更を保存する」を押してください。")
+
+            edited_master = st.data_editor(
+                master_all,
+                use_container_width=True,
+                hide_index=True,
+                key="master_all_editor",
+                column_config={
+                    "受給者証番号": st.column_config.TextColumn("受給者証番号", required=True),
+                    "児童名":       st.column_config.TextColumn("児童名",       required=True),
+                    "市町村番号":   st.column_config.TextColumn("市町村番号",
+                                        help="受給者証に記載の6桁（例：212019）", required=True),
+                    "様式種別番号": st.column_config.SelectboxColumn("様式種別番号",
+                                        options=["0501", "0301"],
+                                        help="放デイ＝0501　児発＝0301", required=True),
+                    "算定時間記載": st.column_config.SelectboxColumn("算定時間記載",
+                                        options=["なし", "あり"],
+                                        help="児発で算定時間を記載する場合のみ「あり」", required=True),
+                },
+            )
+
+            col_save, col_del = st.columns([3, 1])
+            with col_save:
+                if st.button("変更を保存する", type="primary", key="save_master_all"):
+                    save_master(edited_master[MASTER_COLS])
+                    st.success("保存しました")
+                    st.rerun()
+            with col_del:
+                with st.popover("削除する"):
+                    del_options = master_all["受給者証番号"].tolist()
+                    del_target = st.selectbox(
+                        "削除するお子さんの受給者証番号",
+                        del_options,
+                        format_func=lambda x: f"{x}　{master_all[master_all['受給者証番号']==x]['児童名'].values[0]}",
+                        key="del_select",
+                    )
+                    if st.button("削除を実行する", type="primary", key="do_delete"):
+                        m = load_master()
+                        m = m[m["受給者証番号"] != del_target]
+                        save_master(m)
+                        st.success("削除しました")
+                        st.rerun()
 
