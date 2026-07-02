@@ -1,0 +1,8 @@
+streamlit
+pdfplumber
+pdf2image
+Pillow
+reportlab
+anthropic
+PyMuPDF
+pandas

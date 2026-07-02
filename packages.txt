@@ -1,0 +1,6 @@
+poppler-utils
+fonts-noto-cjk
+libpango-1.0-0
+libharfbuzz0b
+libfontconfig1
+libcairo2
