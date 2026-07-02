@@ -2,14 +2,18 @@
 実績記録票 OCR → 国保連CSV 生成システム
 """
 import os
+import re
+import csv as csv_module
 import base64
 import json
+import io
 from pathlib import Path
 
 import math
 
 import anthropic
 import fitz
+import pdfplumber
 import pandas as pd
 import streamlit as st
 
@@ -414,6 +418,74 @@ def card_overwrite(name, jukyu, ym, days, og, ret):
 def card_err(label, msg):
     _card("#FF3B30", label, f'<span style="color:#FF3B30;">{msg}</span>')
 
+
+
+def _parse_meisai_pdf_for_master(pdf_bytes: bytes) -> list:
+    """明細書PDFから受給者証番号・サービス種別を抽出してマスター候補を返す"""
+    rows, seen = [], set()
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            t = (page.extract_text() or "").replace(" ", "").replace("　", "")
+            m = re.search(r"受給者証番号(\d{10})", t)
+            if not m:
+                continue
+            jukyu = m.group(1)
+            if jukyu in seen:
+                continue
+            seen.add(jukyu)
+            shoshiki = "0301" if "児童発達支援" in t else "0501"
+            name = ""
+            for pat in [r"利用者名(.{1,10})", r"受給者氏名(.{1,10})", r"受給者名(.{1,10})"]:
+                nm = re.search(pat, t)
+                if nm:
+                    name = nm.group(1).strip()
+                    break
+            rows.append({"受給者証番号": jukyu, "児童名": name,
+                         "市町村番号": "", "様式種別番号": shoshiki, "算定時間記載": "なし"})
+    return rows
+
+
+def _parse_kokuhoren_csv_for_master(csv_bytes: bytes) -> list:
+    """過去生成した国保連CSV（Shift-JIS）から受給者証番号・市町村番号・様式種別番号を抽出"""
+    rows, seen = [], set()
+    try:
+        text = csv_bytes.decode("cp932", errors="replace")
+    except Exception:
+        text = csv_bytes.decode("utf-8", errors="replace")
+    for row in csv_module.reader(io.StringIO(text)):
+        if len(row) < 9 or row[3].strip() != "01":
+            continue
+        jukyu = row[7].strip()
+        if not jukyu or jukyu in seen:
+            continue
+        seen.add(jukyu)
+        rows.append({"受給者証番号": jukyu, "児童名": "",
+                     "市町村番号": row[5].strip(), "様式種別番号": row[8].strip() or "0501",
+                     "算定時間記載": "なし"})
+    return rows
+
+
+def _merge_into_master(new_rows: list) -> tuple:
+    """new_rowsを既存マスターにマージ。戻り値は (追加数, 更新数)"""
+    m = load_master()
+    added, updated = 0, 0
+    for r in new_rows:
+        jukyu = str(r["受給者証番号"]).strip()
+        existing = m[m["受給者証番号"] == jukyu]
+        if existing.empty:
+            row_df = pd.DataFrame([{c: r.get(c, "") for c in MASTER_COLS}])
+            m = pd.concat([m, row_df], ignore_index=True)
+            added += 1
+        else:
+            idx = existing.index[0]
+            for col in ["市町村番号", "様式種別番号", "算定時間記載"]:
+                if r.get(col):
+                    m.at[idx, col] = r[col]
+            if r.get("児童名") and not m.at[idx, "児童名"]:
+                m.at[idx, "児童名"] = r["児童名"]
+            updated += 1
+    save_master(m)
+    return added, updated
 
 
 def render(settings):
@@ -870,6 +942,69 @@ def render(settings):
     # ============================================================
     with tab5:
         section_title("児童マスター管理", "受給者証番号・児童名・市町村番号などを登録・編集できます")
+
+        # ── データ取り込み ──────────────────────────────────
+        st.markdown('<div style="font-size:14px;font-weight:600;color:#1C1C1E;margin-bottom:8px;">データ取り込み</div>',
+                    unsafe_allow_html=True)
+        imp_col1, imp_col2, imp_col3 = st.columns(3)
+
+        # ① テンプレートダウンロード
+        with imp_col1:
+            tpl = pd.DataFrame([{
+                "受給者証番号": "2010089882",
+                "児童名":       "山田 太郎",
+                "市町村番号":   "212019",
+                "様式種別番号": "0501",
+                "算定時間記載": "なし",
+            }])
+            st.download_button(
+                "📥 CSVテンプレート",
+                data=tpl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                file_name="児童マスター_テンプレート.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Excelで開いて入力し、アップロードしてください",
+            )
+
+        # ② 明細書PDFから自動取得
+        with imp_col2:
+            with st.popover("📄 明細書PDFから取込", use_container_width=True):
+                st.caption("国保連から毎月届く明細書PDFをアップロードすると、受給者証番号・サービス種別を自動で取り込みます。")
+                up_meisai = st.file_uploader("明細書PDF", type=["pdf"], key="master_meisai_pdf")
+                if up_meisai and st.button("取り込む", key="import_meisai", type="primary"):
+                    try:
+                        rows = _parse_meisai_pdf_for_master(up_meisai.read())
+                        if rows:
+                            added, updated = _merge_into_master(rows)
+                            st.success(f"完了：追加 {added}名 / 更新 {updated}名")
+                            if any(not r["児童名"] for r in rows):
+                                st.warning("児童名が取得できなかった行があります。下の一覧で直接入力してください。")
+                            st.rerun()
+                        else:
+                            st.error("受給者証番号が見つかりませんでした")
+                    except Exception as e:
+                        st.error(f"エラー: {e}")
+
+        # ③ 国保連CSVから取込
+        with imp_col3:
+            with st.popover("📊 国保連CSVから取込", use_container_width=True):
+                st.caption("過去に生成した国保連提出用CSVをアップロードすると、受給者証番号・市町村番号・様式種別番号を取り込みます（児童名は別途入力が必要）。")
+                up_kkr = st.file_uploader("国保連CSV", type=["csv"], key="master_kkr_csv")
+                if up_kkr and st.button("取り込む", key="import_kkr", type="primary"):
+                    try:
+                        rows = _parse_kokuhoren_csv_for_master(up_kkr.read())
+                        if rows:
+                            added, updated = _merge_into_master(rows)
+                            st.success(f"完了：追加 {added}名 / 更新 {updated}名")
+                            if any(not r["児童名"] for r in rows):
+                                st.warning("児童名はCSVに含まれていません。下の一覧で直接入力してください。")
+                            st.rerun()
+                        else:
+                            st.error("基本情報レコードが見つかりませんでした")
+                    except Exception as e:
+                        st.error(f"エラー: {e}")
+
+        st.divider()
 
         master_all = load_master()
 
