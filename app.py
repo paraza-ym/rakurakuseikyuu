@@ -119,96 +119,133 @@ st.set_page_config(
     page_title=APP_NAME,
     page_icon="📄",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap');
 html, body, [class*="css"] {
-    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
-                 "Hiragino Sans", "Yu Gothic UI", Arial, sans-serif;
+    font-family: 'Noto Sans JP', -apple-system, "Hiragino Sans", sans-serif;
     -webkit-font-smoothing: antialiased;
 }
+/* サイドバー非表示 */
+section[data-testid="stSidebar"] { display: none !important; }
+.main { margin-left: 0 !important; }
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-header[data-testid="stHeader"] { background: transparent !important; }
+header[data-testid="stHeader"] { display: none !important; }
 .stDeployButton { visibility: hidden; }
-.stApp { background: #FAF6F3; }
-.main .block-container { padding-top: 32px; padding-bottom: 48px; }
-section[data-testid="stSidebar"] {
-    background: #FFFFFF; border-right: 1px solid #EFE6E0;
+/* 背景・中央寄せ */
+.stApp { background: #F0EBE1 !important; }
+.main .block-container {
+    padding-top: 0 !important;
+    padding-bottom: 60px !important;
+    max-width: 880px !important;
 }
-.stTabs [data-baseweb="tab-list"] {
-    background: #F1E7E1; border-radius: 10px; padding: 3px; gap: 2px;
-}
-.stTabs [data-baseweb="tab"] {
-    font-size: 14px; font-weight: 500; color: #8A7F79;
-    border-radius: 8px; padding: 7px 18px; border: none; background: transparent;
-}
-.stTabs [aria-selected="true"] {
-    background: #FFFFFF !important; color: #C0492E !important;
-    font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-}
+/* ボタン全般 */
 .stButton > button {
-    border-radius: 980px; font-weight: 500; font-size: 15px;
-    padding: 9px 22px; border: 1.5px solid #E3D8D1;
-    background: #FFFFFF; color: #2A2420;
+    border-radius: 999px !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+    padding: 10px 24px !important;
+    border: 1.5px solid #D8D2C8 !important;
+    background: #FCFBF8 !important;
+    color: #2E2A22 !important;
+    transition: all .15s !important;
+}
+.stButton > button:hover {
+    background: #F0EBE1 !important;
+    border-color: #C0B8B0 !important;
 }
 .stButton > button[kind="primary"] {
-    background: #F26749; color: #FFFFFF; border: none;
-    box-shadow: 0 2px 10px rgba(242,103,73,0.32);
+    background: #3F7A5C !important;
+    color: white !important;
+    border: none !important;
+    box-shadow: 0 2px 12px rgba(63,122,92,0.28) !important;
 }
-.stButton > button[kind="primary"]:hover { background: #E0573B; }
-[data-testid="stFileUploadDropzone"] {
-    background: #FFFFFF !important; border: 1.5px dashed #E3C9BF !important;
-    border-radius: 14px !important;
+.stButton > button[kind="primary"]:hover {
+    background: #356A4E !important;
 }
-[data-testid="stFileUploadDropzone"]:hover {
-    border-color: #F26749 !important;
+/* ファイルアップローダー */
+[data-testid="stFileUploaderDropzone"] {
+    background: #F8F5EF !important;
+    border: 1.5px dashed #C4BAB0 !important;
+    border-radius: 16px !important;
 }
-
-/* ---- 入力欄を「クリックして編集できる枠」として明確に見せる ---- */
+[data-testid="stFileUploaderDropzone"]:hover {
+    border-color: #3F7A5C !important;
+    background: #EFF5F1 !important;
+}
+/* 入力欄 */
 .stTextInput label, .stDateInput label, .stTextArea label {
     font-size: 13px !important; font-weight: 600 !important;
-    color: #3C3C43 !important; margin-bottom: 2px !important;
+    color: #3C3C43 !important;
 }
 .stTextInput [data-baseweb="input"],
 .stTextInput [data-baseweb="base-input"],
 .stDateInput [data-baseweb="input"],
 .stTextArea [data-baseweb="textarea"] {
-    background: #FFFFFF !important;
-    border: 1.5px solid #C7C7CC !important;
+    background: #FCFBF8 !important;
+    border: 1.5px solid #D8D2C8 !important;
     border-radius: 10px !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
-    transition: border-color .15s, box-shadow .15s;
-}
-.stTextInput [data-baseweb="input"]:hover,
-.stDateInput [data-baseweb="input"]:hover {
-    border-color: #F26749 !important;
 }
 .stTextInput [data-baseweb="input"]:focus-within,
 .stDateInput [data-baseweb="input"]:focus-within,
 .stTextArea [data-baseweb="textarea"]:focus-within {
-    border-color: #F26749 !important;
-    box-shadow: 0 0 0 3px rgba(242,103,73,0.18) !important;
+    border-color: #3F7A5C !important;
+    box-shadow: 0 0 0 3px rgba(63,122,92,0.15) !important;
 }
 .stTextInput input, .stDateInput input, .stTextArea textarea {
     background: transparent !important;
     font-size: 15px !important; color: #1C1C1E !important;
-    padding: 9px 12px !important;
 }
-.stTextInput input::placeholder { color: #B0B0B5 !important; }
-
-/* 設定フォーム内の見出し（#### …）を見やすく */
+/* タブ */
+.stTabs [data-baseweb="tab-list"] {
+    background: #E8E2D8 !important; border-radius: 12px !important;
+    padding: 4px !important; gap: 3px !important;
+}
+.stTabs [data-baseweb="tab"] {
+    font-size: 13px !important; font-weight: 500 !important;
+    color: #7A7469 !important; border-radius: 9px !important;
+}
+.stTabs [aria-selected="true"] {
+    background: #FCFBF8 !important; color: #2E2A22 !important;
+    font-weight: 700 !important; box-shadow: 0 1px 4px rgba(0,0,0,0.09) !important;
+}
+/* 設定フォーム */
 [data-testid="stForm"] h4 {
     font-size: 15px !important; font-weight: 700 !important;
     color: #1C1C1E !important; margin: 18px 0 2px !important;
-    padding-bottom: 6px; border-bottom: 1px solid #E5E5EA;
+    padding-bottom: 6px; border-bottom: 1px solid #E4DED2;
 }
 [data-testid="stForm"] {
-    background: #FFFFFF; border: 1px solid #E5E5EA;
+    background: #FCFBF8; border: 1px solid #E4DED2;
     border-radius: 16px; padding: 8px 24px 20px !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+/* エクスパンダー */
+[data-testid="stExpander"] {
+    border: 1px solid #E4DED2 !important; border-radius: 12px !important;
+}
+/* メトリクス */
+[data-testid="stMetric"] {
+    background: #FCFBF8; border-radius: 14px;
+    padding: 14px; border: 1px solid #E4DED2;
+}
+/* トップバーのナビボタン */
+.topnav-btn > div > div > div > div > div > .stButton > button {
+    border-radius: 999px !important;
+    padding: 7px 13px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    background: transparent !important;
+    border: none !important;
+    color: #7A7469 !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+}
+.topnav-btn > div > div > div > div > div > .stButton > button:hover {
+    background: rgba(0,0,0,0.06) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -745,46 +782,103 @@ if configured and settings.get("password_hash") and not st.session_state.get("au
     render_login(settings)
     st.stop()
 
-# --- サイドバー ---
-with st.sidebar:
+# --- トップナビゲーション ---
+st.markdown("""<style>
+/* ========== トップナビ ========== */
+/* ナビ行のラジオをピル型コンテナに変換 */
+div[data-testid="stHorizontalBlock"]:first-of-type
+  div[data-testid="column"]:nth-child(2)
+  [data-testid="stRadio"] > div {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    background: #EDE8DF !important;
+    border-radius: 999px !important;
+    padding: 4px 5px !important;
+    gap: 2px !important;
+    width: fit-content !important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type
+  div[data-testid="column"]:nth-child(2)
+  [data-testid="stRadio"] [data-baseweb="radio"] > div:first-child {
+    display: none !important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type
+  div[data-testid="column"]:nth-child(2)
+  [data-testid="stRadio"] [data-baseweb="radio"] label {
+    border-radius: 999px !important;
+    padding: 6px 14px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #7A7469 !important;
+    white-space: nowrap !important;
+    margin: 0 !important;
+    line-height: 1.4 !important;
+    transition: background .12s !important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type
+  div[data-testid="column"]:nth-child(2)
+  [data-testid="stRadio"] [data-baseweb="radio"][aria-checked="true"] label,
+div[data-testid="stHorizontalBlock"]:first-of-type
+  div[data-testid="column"]:nth-child(2)
+  [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) label {
+    background: #FCFBF8 !important;
+    color: #2E2A22 !important;
+    font-weight: 700 !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.09) !important;
+}
+/* トップバー全体のカード */
+div[data-testid="stHorizontalBlock"]:first-of-type {
+    background: #FCFBF8 !important;
+    border-radius: 18px !important;
+    border: 1px solid #E4DED2 !important;
+    padding: 8px 16px !important;
+    margin-bottom: 20px !important;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.06) !important;
+    align-items: center !important;
+}
+</style>""", unsafe_allow_html=True)
+
+_col_logo, _col_nav, _col_user = st.columns([2, 6.5, 2])
+with _col_logo:
     st.markdown(
-        '<div style="display:flex;align-items:center;gap:10px;padding:18px 0 18px 0;'
-        'border-bottom:1px solid #EFE6E0;margin-bottom:18px;">'
+        '<div style="display:flex;align-items:center;gap:10px;padding:4px 0;">'
         + brand_mark(34, 9, 17) +
-        '<div><div style="font-size:17px;font-weight:700;color:#2A2420;line-height:1.2;">'
-        f'{APP_NAME}</div>'
-        '<div style="font-size:11px;color:#9B8E86;margin-top:2px;">障害福祉の書類作成ツール</div>'
-        '</div></div>',
+        f'<div style="font-size:15px;font-weight:700;color:#2E2A22;white-space:nowrap;">{APP_NAME}</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
-
+with _col_nav:
     if configured:
         nav = st.radio(
-            "メニュー",
+            "ナビ",
             ["📩 代理受領通知書", "🧾 保護者請求書", "📊 国保連請求", "⚙️ 設定"],
+            horizontal=True,
             label_visibility="collapsed",
         )
     else:
         nav = "⚙️ 設定"
-
-    st.divider()
-    if configured:
-        st.markdown(f'<div style="font-size:12px;color:#6E6E73;">施設：'
-                    f'<b>{settings.get("facility_name", "")}</b></div>', unsafe_allow_html=True)
-    stamp_state = "✓ 登録済み" if STAMP_PATH.exists() else "未登録"
-    stamp_color = "#34C759" if STAMP_PATH.exists() else "#FF9500"
-    st.markdown(f'<div style="font-size:12px;color:#8E8E93;margin-top:4px;">印鑑：'
-                f'<span style="color:{stamp_color};font-weight:600;">{stamp_state}</span></div>',
-                unsafe_allow_html=True)
-
+with _col_user:
+    _fac = settings.get("facility_name", "") if configured else ""
+    _stamp_ok = STAMP_PATH.exists()
+    _logout_html = ""
+    _info_lines = []
+    if _fac:
+        _info_lines.append(f'<b style="color:#2E2A22;font-size:12px;">{_fac}</b>')
+    _info_lines.append(
+        f'<span style="font-size:11px;color:{"#3F7A5C" if _stamp_ok else "#C97A3D"};">'
+        f'印鑑{"✓" if _stamp_ok else "：未登録"}</span>'
+    )
+    st.markdown(
+        f'<div style="text-align:right;padding:6px 0;line-height:1.8;">'
+        + "<br>".join(_info_lines) + "</div>",
+        unsafe_allow_html=True,
+    )
     if settings.get("password_hash") and st.session_state.get("authed"):
-        st.divider()
-        if st.button("ログアウト"):
+        if st.button("ログアウト", key="logout_top"):
             st.session_state["authed"] = False
             st.rerun()
-
-    st.markdown('<div style="font-size:11px;color:#C7C7CC;margin-top:18px;">'
-                'パラザ合同会社　v1.1</div>', unsafe_allow_html=True)
 
 # --- 設定 / オンボーディング ページ ---
 if (not configured) or nav == "⚙️ 設定":
@@ -800,22 +894,6 @@ if nav == "📊 国保連請求":
 # --- 書類作成ページで使う設定値 ---
 fi = {k: settings.get(k, DEFAULTS.get(k, "")) for k in DEFAULTS}
 stamp_img = load_stamp_img()
-
-
-# ============================================================
-# ページヘッダー
-# ============================================================
-st.markdown(
-    '<div style="display:flex;align-items:center;gap:16px;margin-bottom:6px;">'
-    + brand_mark(52, 14, 26) +
-    '<div>'
-    f'<div style="font-size:32px;font-weight:700;color:#2A2420;letter-spacing:-0.5px;">{APP_NAME}</div>'
-    '<div style="font-size:15px;color:#9B8E86;margin-top:4px;">'
-    '国保連から取得した明細書PDFをアップロードするだけで書類を一括生成します'
-    '</div></div></div>',
-    unsafe_allow_html=True,
-)
-st.divider()
 
 
 # ============================================================

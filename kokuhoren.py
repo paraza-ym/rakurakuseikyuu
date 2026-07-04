@@ -635,104 +635,7 @@ section[data-testid="stMain"] .stButton > button[kind="primary"]:hover {{
 }}
 </style>""", unsafe_allow_html=True)
 
-    # ── サイドバー ──────────────────────────────────────────────
-    with st.sidebar:
-        st.markdown(f"""
-        <div style="background:{_C["plight"]};border-radius:14px;
-             padding:14px 16px;margin:0 0 14px 0;">
-          <div style="font-size:13.5px;font-weight:700;color:{_C["prim"]};">
-            📊 国保連請求
-          </div>
-          <div style="font-size:12px;color:{_C["txt2"]};margin-top:3px;line-height:1.7;">
-            実績記録票 → 国保連CSV
-          </div>
-        </div>""", unsafe_allow_html=True)
-
-        api_key = st.session_state.get("api_key", "")
-
-        st.markdown(f"""
-        <div style="font-size:12.5px;line-height:2.1;padding:2px 0;">
-          <div style="font-weight:700;color:{_C["txt"]};margin-bottom:4px;">使い方（3ステップ）</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
-            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
-                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
-                 justify-content:center;flex-shrink:0;">1</div>
-            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">実績記録票を読み取る</div>
-          </div>
-          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;margin-bottom:6px;">
-            写真・PDFをアップロード</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
-            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
-                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
-                 justify-content:center;flex-shrink:0;">2</div>
-            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">内容を確認する</div>
-          </div>
-          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;margin-bottom:6px;">
-            読み取り結果をチェック・修正</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
-            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
-                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
-                 justify-content:center;flex-shrink:0;">3</div>
-            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">CSVを作って提出する</div>
-          </div>
-          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;">
-            国保連に提出するCSVをダウンロード</div>
-        </div>""", unsafe_allow_html=True)
-
-        st.divider()
-        with st.expander("児童マスターのバックアップ"):
-            st.caption("コンテナ停止後の復元用に手元に保存しておいてください")
-            if MASTER_PATH.exists():
-                st.download_button(
-                    "マスターをダウンロード",
-                    data=MASTER_PATH.read_bytes(),
-                    file_name="児童マスター.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.caption("まだマスターデータがありません")
-            uploaded_master = st.file_uploader("マスターを復元（CSVをアップロード）",
-                                               type="csv", key="master_upload")
-            if uploaded_master:
-                save_master(pd.read_csv(uploaded_master, dtype=str, keep_default_na=False))
-                st.success("復元しました")
-                st.rerun()
-
-        with st.expander("データ管理"):
-            if st.session_state.pop("kokuhoren_reset_done", False):
-                st.success("削除しました")
-
-            months = get_meisai_months()
-            has_master = MASTER_PATH.exists()
-
-            st.markdown('<div style="font-size:12px;color:#8E8E93;margin-bottom:6px;">保存中のデータ</div>',
-                        unsafe_allow_html=True)
-            if months:
-                st.caption(f"実績：{', '.join(m[:4]+'年'+m[4:]+'月' for m in months)}")
-            else:
-                st.caption("実績：なし")
-            st.caption(f"児童マスター：{'あり（' + str(len(load_master())) + '名）' if has_master else 'なし'}")
-
-            st.markdown('<div style="font-size:12px;color:#8E8E93;margin-top:10px;margin-bottom:4px;">削除対象</div>',
-                        unsafe_allow_html=True)
-            del_jisseki = st.checkbox("実績データ", key="del_jisseki",
-                                      value=False, disabled=not months)
-            del_master  = st.checkbox("児童マスター", key="del_master",
-                                      value=False, disabled=not has_master)
-
-            nothing_selected = not del_jisseki and not del_master
-            confirm = st.checkbox("削除に同意する", key="reset_confirm",
-                                  disabled=nothing_selected)
-
-            if st.button("削除を実行する", type="secondary", key="reset_all",
-                         disabled=nothing_selected or not confirm):
-                if del_jisseki:
-                    for f in DATA_DIR.glob("実績明細_*.csv"):
-                        f.unlink()
-                if del_master and MASTER_PATH.exists():
-                    MASTER_PATH.unlink()
-                st.session_state["kokuhoren_reset_done"] = True
-                st.rerun()
+    api_key = st.session_state.get("api_key", "")
 
     # ── ページヘッダー ─────────────────────────────────────────
     st.markdown(f"""
@@ -1334,4 +1237,58 @@ section[data-testid="stMain"] .stButton > button[kind="primary"]:hover {{
                         save_master(m)
                         st.success("削除しました")
                         st.rerun()
+
+        st.divider()
+
+        # ── バックアップ ─────────────────────────────────────────
+        with st.expander("児童マスターのバックアップ"):
+            st.caption("コンテナ停止後の復元用に手元に保存しておいてください")
+            if MASTER_PATH.exists():
+                st.download_button(
+                    "マスターをダウンロード",
+                    data=MASTER_PATH.read_bytes(),
+                    file_name="児童マスター.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.caption("まだマスターデータがありません")
+            uploaded_master = st.file_uploader("マスターを復元（CSVをアップロード）",
+                                               type="csv", key="master_upload")
+            if uploaded_master:
+                save_master(pd.read_csv(uploaded_master, dtype=str, keep_default_na=False))
+                st.success("復元しました")
+                st.rerun()
+
+        # ── データ管理 ─────────────────────────────────────────
+        with st.expander("データ管理（削除）"):
+            if st.session_state.pop("kokuhoren_reset_done", False):
+                st.success("削除しました")
+
+            months = get_meisai_months()
+            has_master = MASTER_PATH.exists()
+
+            if months:
+                st.caption(f"実績データ：{', '.join(m[:4]+'年'+m[4:]+'月' for m in months)}")
+            else:
+                st.caption("実績データ：なし")
+            st.caption(f"児童マスター：{'あり（' + str(len(load_master())) + '名）' if has_master else 'なし'}")
+
+            del_jisseki = st.checkbox("実績データを削除", key="del_jisseki",
+                                      value=False, disabled=not months)
+            del_master_chk = st.checkbox("児童マスターを削除", key="del_master",
+                                         value=False, disabled=not has_master)
+
+            nothing_selected = not del_jisseki and not del_master_chk
+            confirm = st.checkbox("削除に同意する", key="reset_confirm",
+                                  disabled=nothing_selected)
+
+            if st.button("削除を実行する", type="secondary", key="reset_all",
+                         disabled=nothing_selected or not confirm):
+                if del_jisseki:
+                    for f in DATA_DIR.glob("実績明細_*.csv"):
+                        f.unlink()
+                if del_master_chk and MASTER_PATH.exists():
+                    MASTER_PATH.unlink()
+                st.session_state["kokuhoren_reset_done"] = True
+                st.rerun()
 
