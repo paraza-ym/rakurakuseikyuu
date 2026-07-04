@@ -166,7 +166,6 @@ def save_meisai(data):
     ]
     df = pd.concat([df, pd.DataFrame(rows, columns=MEISAI_COLS)], ignore_index=True)
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    upsert_master(str(data["受給者証番号"]), data["児童名"])
 
 def check_duplicate(data):
     df = load_meisai(data["サービス提供年月"])
@@ -303,31 +302,46 @@ def generate_kokuhoren_csv(ym):
         sansei     = get_sansei(jukyu)
         is_jihatsu = shoshiki.startswith("03")
         sougei     = int(t["送迎往合計"]) + int(t["送迎復合計"])
-        day_df = df[(df["受給者証番号"] == jukyu) & (df["状況"] == "提供")].copy()
-        day_df["日_num"] = pd.to_numeric(day_df["日"], errors="coerce")
-        day_df = day_df.sort_values("日_num")
-        total_min = (sum(_to_min(_hhmm(r["終了時間"])) - _to_min(_hhmm(r["開始時間"]))
-                        for _, r in day_df.iterrows())
-                    if sansei else 0)
+        # 全日（提供＋欠席）を取得してソート
+        all_df = df[df["受給者証番号"] == jukyu].copy()
+        all_df["日_num"] = pd.to_numeric(all_df["日"], errors="coerce")
+        all_df = all_df[all_df["状況"].isin(["提供", "欠席"])].sort_values("日_num")
+        # 算定時間合計は提供日のみ
+        day_df = all_df[all_df["状況"] == "提供"]
+        # 算定時間数は15分刻み切り上げ後の小数時間×100を4桁（国保連CSV形式）
+        # 例: 1h40m → calc_santei_jikan → 1.75 → 175 → "0175"
+        total_jikan_hundred = (
+            sum(int(round(calc_santei_jikan(r["開始時間"], r["終了時間"]) * 100))
+                for _, r in day_df.iterrows())
+            if sansei else 0
+        )
         rec_no += 1
         b = BASIC_TEMPLATE.copy()
         b[1] = str(rec_no); b[4] = ym;       b[5] = muni; b[6] = JIGYOSHO["number"]
         b[7] = jukyu;       b[8] = shoshiki
-        b[20] = _min_to_hhmm(total_min, 5) if sansei else "00000"
+        b[20] = str(total_jikan_hundred).zfill(5) if sansei else "00000"
         b[35] = str(sougei)
         lines.append(_line(b, BASIC_QUOTE))
-        for _, dr in day_df.iterrows():
+        for _, dr in all_df.iterrows():
             rec_no += 1
-            s = _hhmm(dr["開始時間"]); e = _hhmm(dr["終了時間"])
+            is_absent = str(dr.get("状況", "")) == "欠席"
+            s = "0000" if is_absent else _hhmm(dr["開始時間"])
+            e = "0000" if is_absent else _hhmm(dr["終了時間"])
             katachi = str(dr["提供形態"]).strip()
             k = katachi if katachi in ("1", "2") else "1"
+            day_jikan_hundred = (
+                int(round(calc_santei_jikan(dr["開始時間"], dr["終了時間"]) * 100))
+                if (sansei and not is_absent) else 0
+            )
             d = DETAIL_TEMPLATE.copy()
             d[1]  = str(rec_no); d[4]  = ym;      d[5]  = muni; d[6] = JIGYOSHO["number"]
             d[7]  = jukyu;       d[8]  = shoshiki; d[10] = str(int(dr["日_num"]))
+            d[11] = "2" if is_absent else "0"   # サービス提供の状況: 0=提供, 2=欠席(加算なし)
             d[15] = s;           d[16] = e
-            d[17] = _min_to_hhmm(_to_min(e) - _to_min(s), 4) if sansei else "0000"
-            d[22] = _int_field(dr["送迎往"]); d[23] = _int_field(dr["送迎復"])
-            d[35] = "0" if is_jihatsu else k
+            d[17] = str(day_jikan_hundred).zfill(4) if sansei else "0000"
+            d[22] = "0" if is_absent else _int_field(dr["送迎往"])
+            d[23] = "0" if is_absent else _int_field(dr["送迎復"])
+            d[35] = "0" if (is_absent or is_jihatsu) else k
             lines.append(_line(d, DETAIL_QUOTE))
     ctrl = _line(["1", "1", "0", str(len(lines)), JIGYOSHO["data_type"], "0",
                   JIGYOSHO["number"], "0", "1", proc_ym, ""], CTRL_QUOTE)
@@ -339,109 +353,160 @@ def generate_kokuhoren_csv(ym):
 # ============================================================
 
 
+# ── v2 デザイントークン ───────────────────────────────────────
+_C = {
+    "card":   "#FCFBF8",
+    "prim":   "#3F7A5C",
+    "pmid":   "#4E8F6F",
+    "plight": "#DCEBE0",
+    "txt":    "#2E2A22",
+    "txt2":   "#7A7469",
+    "muted":  "#9C978C",
+    "warn":   "#C97A3D",
+    "border": "#E4DED2",
+    "ok_bg":  "#EBF5F0",
+    "ok_dot": "#2E7D5A",
+    "ow_bg":  "#FEF6EC",
+    "ow_dot": "#C97A3D",
+    "err_bg": "#FEF2F2",
+    "err_dot":"#C0392B",
+}
+
 def section_title(title, subtitle=""):
-    sub = f'<div style="font-size:13px;color:#8E8E93;margin-top:4px;">{subtitle}</div>' if subtitle else ""
+    sub = (f'<div style="font-size:13.5px;color:{_C["txt2"]};margin-top:5px;line-height:1.6;">'
+           f'{subtitle}</div>') if subtitle else ""
     st.markdown(f"""
     <div style="margin:28px 0 16px 0;">
-        <div style="font-size:20px;font-weight:700;color:#1C1C1E;letter-spacing:-0.3px;">{title}</div>
+        <div style="font-size:21px;font-weight:700;color:{_C["txt"]};letter-spacing:-0.2px;">{title}</div>
         {sub}
     </div>""", unsafe_allow_html=True)
 
 def step_badge(num, title, subtitle=""):
-    sub = f'<div style="font-size:13px;color:#8E8E93;margin-top:3px;">{subtitle}</div>' if subtitle else ""
+    sub = (f'<div style="font-size:13px;color:{_C["txt2"]};margin-top:3px;">'
+           f'{subtitle}</div>') if subtitle else ""
     st.markdown(f"""
-    <div style="display:flex;align-items:flex-start;gap:12px;margin:28px 0 16px 0;">
-        <div style="min-width:30px;height:30px;border-radius:50%;background:#007AFF;color:white;
-             font-size:14px;font-weight:700;display:flex;align-items:center;
-             justify-content:center;margin-top:2px;">{num}</div>
+    <div style="display:flex;align-items:flex-start;gap:13px;margin:28px 0 14px 0;">
+        <div style="min-width:32px;height:32px;border-radius:50%;background:{_C["prim"]};
+             color:white;font-size:14px;font-weight:700;display:flex;align-items:center;
+             justify-content:center;margin-top:2px;flex-shrink:0;">{num}</div>
         <div>
-            <div style="font-size:18px;font-weight:600;color:#1C1C1E;">{title}</div>
+            <div style="font-size:18px;font-weight:700;color:{_C["txt"]};">{title}</div>
             {sub}
         </div>
     </div>""", unsafe_allow_html=True)
 
 def next_step_hint(text):
     st.markdown(f"""
-    <div style="background:#EFF6FF;border-radius:12px;padding:14px 18px;margin:16px 0;
-         border-left:3px solid #007AFF;">
-        <span style="font-size:14px;color:#1D4ED8;font-weight:500;">次のステップ　→　{text}</span>
+    <div style="background:{_C["plight"]};border-radius:12px;padding:14px 18px;margin:18px 0;
+         border-left:3px solid {_C["prim"]};">
+        <span style="font-size:14px;color:{_C["prim"]};font-weight:600;">次のステップ　→　{text}</span>
     </div>""", unsafe_allow_html=True)
 
 def empty_state(title, body):
     st.markdown(f"""
-    <div style="background:#FFFFFF;border-radius:16px;padding:48px 32px;text-align:center;
-         box-shadow:0 1px 4px rgba(0,0,0,0.07);margin:8px 0;">
-        <div style="font-size:17px;font-weight:600;color:#1C1C1E;margin-bottom:8px;">{title}</div>
-        <div style="font-size:14px;color:#8E8E93;line-height:1.7;">{body}</div>
+    <div style="background:{_C["card"]};border-radius:20px;padding:52px 32px;text-align:center;
+         box-shadow:0 2px 8px rgba(0,0,0,0.05);margin:8px 0;border:1px solid {_C["border"]};">
+        <div style="font-size:17px;font-weight:700;color:{_C["txt"]};margin-bottom:8px;">{title}</div>
+        <div style="font-size:14px;color:{_C["txt2"]};line-height:1.8;">{body}</div>
     </div>""", unsafe_allow_html=True)
 
 def alert(status, msg):
     cfg = {
-        "ok":    ("#F0FFF4", "#34C759", "#166534"),
-        "warn":  ("#FFFBEB", "#FF9500", "#92400E"),
-        "error": ("#FEF2F2", "#FF3B30", "#991B1B"),
+        "ok":    (_C["ok_bg"],  _C["ok_dot"],  "#1A5C3A"),
+        "warn":  (_C["ow_bg"],  _C["warn"],    "#7A4A1A"),
+        "error": (_C["err_bg"], _C["err_dot"], "#8B1A1A"),
     }
     bg, bc, tc = cfg[status]
     st.markdown(f"""
-    <div style="background:{bg};border-radius:14px;padding:18px 22px;
-         margin:16px 0;border-left:3px solid {bc};">
-        <div style="font-size:16px;font-weight:700;color:{tc};">{msg}</div>
+    <div style="background:{bg};border-radius:14px;padding:16px 20px;
+         margin:14px 0;border-left:3px solid {bc};">
+        <div style="font-size:15px;font-weight:700;color:{tc};">{msg}</div>
     </div>""", unsafe_allow_html=True)
 
-def _card(dot_color, title_html, detail="", bg="#FFFFFF"):
-    detail_html = (f'<div style="font-size:13px;color:#8E8E93;margin-top:4px;">{detail}</div>'
+def _card(dot_color, title_html, detail="", bg=None):
+    bg = bg or _C["card"]
+    detail_html = (f'<div style="font-size:13px;color:{_C["txt2"]};margin-top:5px;">{detail}</div>'
                    if detail else "")
     st.markdown(f"""
-    <div style="background:{bg};border-radius:14px;padding:16px 20px;margin:8px 0;
-         box-shadow:0 1px 4px rgba(0,0,0,0.07);">
-        <div style="display:flex;align-items:center;gap:12px;">
+    <div style="background:{bg};border-radius:16px;padding:17px 22px;margin:8px 0;
+         box-shadow:0 2px 8px rgba(0,0,0,0.05);border:1px solid {_C["border"]};">
+        <div style="display:flex;align-items:center;gap:13px;">
             <div style="width:10px;height:10px;border-radius:50%;
                  background:{dot_color};flex-shrink:0;"></div>
-            <div>
-                <div style="font-size:15px;font-weight:600;color:#1C1C1E;">{title_html}</div>
+            <div style="flex:1;">
+                <div style="font-size:15px;font-weight:600;color:{_C["txt"]};">{title_html}</div>
                 {detail_html}
             </div>
         </div>
     </div>""", unsafe_allow_html=True)
 
 def _child_detail(jukyu, ym, days, og, ret):
-    return f"受給者証 {jukyu}　·　{ym[:4]}年{ym[4:]}月　·　{days}日　·　送迎 往{og} / 復{ret}"
+    return (f'受給者証 {jukyu}　·　{ym[:4]}年{ym[4:]}月　·　'
+            f'<b style="color:{_C["txt"]};">{days}日</b>　·　送迎 往{og} / 復{ret}')
 
 def card_ok(name, jukyu, ym, days, og, ret):
-    _card("#34C759", name, _child_detail(jukyu, ym, days, og, ret))
+    _card(_C["ok_dot"], name, _child_detail(jukyu, ym, days, og, ret), bg=_C["ok_bg"])
 
 def card_overwrite(name, jukyu, ym, days, og, ret):
-    title = (f'{name}　<span style="font-size:12px;font-weight:500;color:#FF9500;">'
+    title = (f'{name}　<span style="font-size:12px;font-weight:500;color:{_C["warn"]};">'
              f'⚠ 同じ月のデータが既にありました。上書きしました。</span>')
-    _card("#FF9500", title, _child_detail(jukyu, ym, days, og, ret), bg="#FFFBEB")
+    _card(_C["ow_dot"], title, _child_detail(jukyu, ym, days, og, ret), bg=_C["ow_bg"])
 
 def card_err(label, msg):
-    _card("#FF3B30", label, f'<span style="color:#FF3B30;">{msg}</span>')
+    _card(_C["err_dot"], label,
+          f'<span style="color:{_C["err_dot"]};">{msg}</span>', bg=_C["err_bg"])
 
 
 
-def _parse_meisai_pdf_for_master(pdf_bytes: bytes) -> list:
-    """明細書PDFから受給者証番号・サービス種別を抽出してマスター候補を返す"""
+def _parse_meisai_pdf_for_master(pdf_bytes: bytes, api_key: str) -> list:
+    """明細書PDFをClaude Vision APIで読み取りマスター候補を返す"""
+    client = anthropic.Anthropic(api_key=api_key)
+    prompt = """これは国保連（国民健康保険団体連合会）から届いた障害福祉サービスの「明細書」です。
+以下の情報を抽出してJSONのみ返してください（説明文不要）：
+{
+  "受給者証番号": "10桁の数字（文字列）またはnull",
+  "児童名": "受給者・利用者のお子さんの名前またはnull",
+  "市町村番号": "6桁の数字（文字列）またはnull",
+  "様式種別番号": "放課後等デイサービスなら0501、児童発達支援なら0301"
+}
+【読み取りのヒント】
+- 受給者証番号：「受給者証番号」「受給者番号」と書かれた欄の隣の10桁の数字
+- 市町村番号：「市町村番号」「市区町村番号」と書かれた欄の6桁の数字
+- 児童名：「受給者氏名」「利用者名」「お子さんの名前」などの欄の名前
+- サービス種別：「放課後等デイサービス」か「児童発達支援」のどちらかが記載されている"""
+
+    pages_png = pdf_to_png(pdf_bytes)
     rows, seen = [], set()
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            t = (page.extract_text() or "").replace(" ", "").replace("　", "")
-            m = re.search(r"受給者証番号(\d{10})", t)
-            if not m:
+    for png_bytes in pages_png:
+        b64 = base64.standard_b64encode(png_bytes).decode("utf-8")
+        try:
+            resp = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=500,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                                                 "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            )
+            text = resp.content[0].text
+            start, end = text.find("{"), text.rfind("}") + 1
+            if start == -1:
                 continue
-            jukyu = m.group(1)
-            if jukyu in seen:
+            d = json.loads(text[start:end])
+            jukyu = str(d.get("受給者証番号") or "").strip()
+            if not jukyu or jukyu in seen:
                 continue
             seen.add(jukyu)
-            shoshiki = "0301" if "児童発達支援" in t else "0501"
-            name = ""
-            for pat in [r"利用者名(.{1,10})", r"受給者氏名(.{1,10})", r"受給者名(.{1,10})"]:
-                nm = re.search(pat, t)
-                if nm:
-                    name = nm.group(1).strip()
-                    break
-            rows.append({"受給者証番号": jukyu, "児童名": name,
-                         "市町村番号": "", "様式種別番号": shoshiki, "算定時間記載": "なし"})
+            rows.append({
+                "受給者証番号": jukyu,
+                "児童名":       str(d.get("児童名") or "").strip(),
+                "市町村番号":   str(d.get("市町村番号") or "").strip(),
+                "様式種別番号": str(d.get("様式種別番号") or "0501").strip(),
+                "算定時間記載": "なし",
+            })
+        except Exception:
+            continue
     return rows
 
 
@@ -510,27 +575,109 @@ def render(settings):
         st.session_state["api_key"] = load_saved_api_key()
 
 
+    # ── 国保連ページ専用 CSS ────────────────────────────────────
+    st.markdown(f"""<style>
+/* タブをグリーン系に上書き */
+.stTabs [data-baseweb="tab-list"] {{
+    background: #E8E2D8 !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    gap: 3px !important;
+}}
+.stTabs [data-baseweb="tab"] {{
+    border-radius: 9px !important;
+    font-weight: 500 !important;
+    color: {_C["txt2"]} !important;
+    font-size: 13px !important;
+}}
+.stTabs [aria-selected="true"] {{
+    background: {_C["card"]} !important;
+    color: {_C["txt"]} !important;
+    font-weight: 700 !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.09) !important;
+}}
+/* プライマリボタンをグリーンに上書き */
+section[data-testid="stMain"] .stButton > button[kind="primary"] {{
+    background: {_C["prim"]} !important;
+    border-color: {_C["prim"]} !important;
+    box-shadow: 0 2px 10px rgba(63,122,92,0.28) !important;
+}}
+section[data-testid="stMain"] .stButton > button[kind="primary"]:hover {{
+    background: {_C["pmid"]} !important;
+    border-color: {_C["pmid"]} !important;
+}}
+/* ファイルアップローダー */
+[data-testid="stFileUploaderDropzone"] {{
+    background: #F5F1EB !important;
+    border: 1.5px dashed #C4BAB0 !important;
+    border-radius: 16px !important;
+}}
+[data-testid="stFileUploaderDropzone"]:hover {{
+    border-color: {_C["prim"]} !important;
+}}
+/* メトリクスカード */
+[data-testid="stMetric"] {{
+    background: {_C["card"]};
+    border-radius: 14px;
+    padding: 14px;
+    border: 1px solid {_C["border"]};
+}}
+/* エクスパンダー */
+[data-testid="stExpander"] {{
+    border: 1px solid {_C["border"]} !important;
+    border-radius: 12px !important;
+}}
+/* データエディタ角丸 */
+[data-testid="stDataFrameResizable"] {{
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid {_C["border"]};
+}}
+</style>""", unsafe_allow_html=True)
+
     # ── サイドバー ──────────────────────────────────────────────
     with st.sidebar:
-        st.markdown(
-            '<div style="font-size:13px;font-weight:700;color:#2A2420;'
-            'margin:6px 0 10px;">📊 国保連請求 メニュー</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"""
+        <div style="background:{_C["plight"]};border-radius:14px;
+             padding:14px 16px;margin:0 0 14px 0;">
+          <div style="font-size:13.5px;font-weight:700;color:{_C["prim"]};">
+            📊 国保連請求
+          </div>
+          <div style="font-size:12px;color:{_C["txt2"]};margin-top:3px;line-height:1.7;">
+            実績記録票 → 国保連CSV
+          </div>
+        </div>""", unsafe_allow_html=True)
+
         api_key = st.session_state.get("api_key", "")
 
-        st.divider()
-        st.markdown("""
-    <div style="font-size:13px;line-height:2.2;">
-    <div style="font-weight:700;color:#1C1C1E;margin-bottom:2px;">使い方（3ステップ）</div>
-    <div style="color:#007AFF;font-weight:600;">① 実績記録票を読み取る</div>
-    <div style="color:#8E8E93;font-size:12px;padding-left:12px;margin-bottom:4px;">写真・PDFをアップロード</div>
-    <div style="color:#007AFF;font-weight:600;">② 内容を確認する</div>
-    <div style="color:#8E8E93;font-size:12px;padding-left:12px;margin-bottom:4px;">読み取り結果をチェック・修正</div>
-    <div style="color:#007AFF;font-weight:600;">③ CSVを作って提出する</div>
-    <div style="color:#8E8E93;font-size:12px;padding-left:12px;">国保連に提出するCSVをダウンロード</div>
-    </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="font-size:12.5px;line-height:2.1;padding:2px 0;">
+          <div style="font-weight:700;color:{_C["txt"]};margin-bottom:4px;">使い方（3ステップ）</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
+                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
+                 justify-content:center;flex-shrink:0;">1</div>
+            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">実績記録票を読み取る</div>
+          </div>
+          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;margin-bottom:6px;">
+            写真・PDFをアップロード</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
+                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
+                 justify-content:center;flex-shrink:0;">2</div>
+            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">内容を確認する</div>
+          </div>
+          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;margin-bottom:6px;">
+            読み取り結果をチェック・修正</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+            <div style="width:20px;height:20px;border-radius:50%;background:{_C["prim"]};
+                 color:white;font-size:10px;font-weight:700;display:flex;align-items:center;
+                 justify-content:center;flex-shrink:0;">3</div>
+            <div style="color:{_C["txt"]};font-weight:600;font-size:12.5px;">CSVを作って提出する</div>
+          </div>
+          <div style="color:{_C["txt2"]};font-size:11.5px;padding-left:28px;">
+            国保連に提出するCSVをダウンロード</div>
+        </div>""", unsafe_allow_html=True)
 
         st.divider()
         with st.expander("児童マスターのバックアップ"):
@@ -552,42 +699,66 @@ def render(settings):
                 st.rerun()
 
         with st.expander("データ管理"):
-            st.caption("全データ（実績明細・児童マスター）を削除してまっさらにします")
             if st.session_state.pop("kokuhoren_reset_done", False):
-                st.success("リセットしました")
+                st.success("削除しました")
+
             months = get_meisai_months()
+            has_master = MASTER_PATH.exists()
+
+            st.markdown('<div style="font-size:12px;color:#8E8E93;margin-bottom:6px;">保存中のデータ</div>',
+                        unsafe_allow_html=True)
             if months:
-                st.caption(f"保存中：{', '.join(m[:4]+'年'+m[4:]+'月' for m in months)}")
+                st.caption(f"実績：{', '.join(m[:4]+'年'+m[4:]+'月' for m in months)}")
             else:
-                st.caption("保存中のデータはありません")
-            confirm = st.checkbox("削除に同意する", key="reset_confirm")
-            if st.button("全データをリセット", type="secondary", key="reset_all", disabled=not confirm):
-                deleted = 0
-                for f in DATA_DIR.glob("実績明細_*.csv"):
-                    f.unlink()
-                    deleted += 1
-                if MASTER_PATH.exists():
+                st.caption("実績：なし")
+            st.caption(f"児童マスター：{'あり（' + str(len(load_master())) + '名）' if has_master else 'なし'}")
+
+            st.markdown('<div style="font-size:12px;color:#8E8E93;margin-top:10px;margin-bottom:4px;">削除対象</div>',
+                        unsafe_allow_html=True)
+            del_jisseki = st.checkbox("実績データ", key="del_jisseki",
+                                      value=False, disabled=not months)
+            del_master  = st.checkbox("児童マスター", key="del_master",
+                                      value=False, disabled=not has_master)
+
+            nothing_selected = not del_jisseki and not del_master
+            confirm = st.checkbox("削除に同意する", key="reset_confirm",
+                                  disabled=nothing_selected)
+
+            if st.button("削除を実行する", type="secondary", key="reset_all",
+                         disabled=nothing_selected or not confirm):
+                if del_jisseki:
+                    for f in DATA_DIR.glob("実績明細_*.csv"):
+                        f.unlink()
+                if del_master and MASTER_PATH.exists():
                     MASTER_PATH.unlink()
-                    deleted += 1
-                api_key_file = DATA_DIR / ".api_key"
-                if api_key_file.exists():
-                    api_key_file.unlink()
                 st.session_state["kokuhoren_reset_done"] = True
                 st.rerun()
 
-    # ── ページタイトル ─────────────────────────────────────────
-    st.markdown("""
-    <div style="margin-bottom:6px;">
-        <div style="font-size:32px;font-weight:700;color:#2A2420;letter-spacing:-0.5px;">📊 国保連請求</div>
-        <div style="font-size:15px;color:#9B8E86;margin-top:6px;">
-            実績記録票を写真で撮るだけで、国保連への提出データを自動で作ります
+    # ── ページヘッダー ─────────────────────────────────────────
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:4px;">
+      <div style="width:52px;height:52px;border-radius:15px;background:{_C["plight"]};
+           display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <div style="display:flex;align-items:flex-end;gap:3.5px;height:20px;">
+          <div style="width:5px;height:10px;background:{_C["prim"]};border-radius:1.5px;"></div>
+          <div style="width:5px;height:20px;background:{_C["prim"]};border-radius:1.5px;"></div>
+          <div style="width:5px;height:14px;background:{_C["prim"]};border-radius:1.5px;"></div>
         </div>
-    </div>""", unsafe_allow_html=True)
-    st.divider()
-
+      </div>
+      <div>
+        <div style="font-size:26px;font-weight:800;color:{_C["txt"]};
+             letter-spacing:-0.3px;line-height:1.2;">国保連請求</div>
+        <div style="font-size:14px;color:{_C["txt2"]};margin-top:3px;">
+             実績記録票を写真で撮るだけで、国保連への提出データを自動で作ります</div>
+      </div>
+    </div>
+    <div style="height:1px;background:{_C["border"]};margin:16px 0 20px 0;"></div>
+    """, unsafe_allow_html=True)
 
     # ── タブ ─────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["① 読み取り", "② 内容確認", "③ 請求前チェック", "④ CSV生成", "⑤ 児童マスター"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["① 読み取り", "② 内容確認", "③ 請求前チェック", "④ CSV生成", "⑤ 児童マスター"]
+    )
 
 
     # ============================================================
@@ -606,26 +777,37 @@ def render(settings):
                 help="1人1枚ずつでも、まとめてでもOKです",
             )
         with col_tip:
-            st.markdown("""
-            <div style="background:#FFFFFF;border-radius:14px;padding:18px 20px;
-                 box-shadow:0 1px 4px rgba(0,0,0,0.07);margin-top:8px;">
-                <div style="font-size:13px;font-weight:700;color:#1C1C1E;margin-bottom:10px;">
+            tips = [("明るい場所で撮る"), ("真上からまっすぐ撮る"), ("ピントを合わせる"), ("PDFでもOK")]
+            tips_html = "".join(
+                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                f'<div style="width:18px;height:18px;border-radius:50%;background:{_C["plight"]};'
+                f'flex-shrink:0;display:flex;align-items:center;justify-content:center;">'
+                f'<div style="width:4px;height:7px;border-right:2px solid {_C["prim"]};'
+                f'border-bottom:2px solid {_C["prim"]};transform:rotate(40deg);'
+                f'margin-top:-2px;"></div></div>'
+                f'<span>{t}</span></div>'
+                for t in tips
+            )
+            st.markdown(f"""
+            <div style="background:{_C["card"]};border-radius:16px;padding:18px 20px;
+                 box-shadow:0 2px 8px rgba(0,0,0,0.05);margin-top:6px;
+                 border:1px solid {_C["border"]};">
+                <div style="font-size:13px;font-weight:700;color:{_C["prim"]};margin-bottom:12px;">
                     うまく読み取れないときは
                 </div>
-                <div style="font-size:13px;color:#8E8E93;line-height:2.0;">
-                    ✓ 明るい場所で撮る<br>
-                    ✓ 真上からまっすぐ撮る<br>
-                    ✓ ピントを合わせる<br>
-                    ✓ PDFでもOK
+                <div style="font-size:13px;color:{_C["txt2"]};line-height:1.5;">
+                    {tips_html}
                 </div>
             </div>""", unsafe_allow_html=True)
 
         if not uploaded_files:
-            st.markdown("""
-            <div style="background:#FFFFFF;border-radius:14px;padding:20px 24px;margin-top:16px;
-                 box-shadow:0 1px 4px rgba(0,0,0,0.05);">
-                <div style="font-size:14px;color:#8E8E93;text-align:center;">
-                    上のエリアにファイルをドラッグするか、クリックして選択してください
+            st.markdown(f"""
+            <div style="background:{_C["plight"]};border-radius:14px;padding:16px 22px;
+                 margin-top:14px;border:1px solid {_C["border"]};">
+                <div style="font-size:13.5px;color:{_C["prim"]};text-align:center;font-weight:500;">
+                    ↑ ファイルをドラッグするか、クリックして選択してください<br>
+                    <span style="font-size:12px;font-weight:400;color:{_C["txt2"]};">
+                    200MB以内 · JPG, PNG, WEBP, PDF</span>
                 </div>
             </div>""", unsafe_allow_html=True)
 
@@ -634,15 +816,15 @@ def render(settings):
 
         else:
             st.markdown(f"""
-            <div style="background:#FFFFFF;border-radius:12px;padding:14px 18px;margin:12px 0;
-                 box-shadow:0 1px 4px rgba(0,0,0,0.05);">
-                <span style="font-size:14px;color:#1C1C1E;">
-                    <b>{len(uploaded_files)}件</b>のファイルが選択されています
+            <div style="background:{_C["ok_bg"]};border-radius:12px;padding:13px 18px;margin:12px 0;
+                 border:1px solid {_C["border"]};">
+                <span style="font-size:14px;color:{_C["ok_dot"]};font-weight:600;">
+                    ✓ <b>{len(uploaded_files)}件</b>のファイルが選択されています
                 </span>
             </div>""", unsafe_allow_html=True)
 
             if st.button("読み取りを開始する", type="primary"):
-                results, all_jobs = [], []
+                all_jobs = []
                 for uf in uploaded_files:
                     ext = uf.name.rsplit(".", 1)[-1].lower()
                     raw = uf.read()
@@ -654,35 +836,96 @@ def render(settings):
                                 "png": "image/png",  "webp": "image/webp"}.get(ext, "image/jpeg")
                         all_jobs.append((raw, mime, uf.name))
 
+                ocr_done, ocr_pending, ocr_err = [], [], []
                 progress = st.progress(0, text="読み取り中...")
+                master_jukyus = set(load_master()["受給者証番号"].astype(str))
                 for idx, (img_bytes, mime, label) in enumerate(all_jobs):
                     progress.progress((idx + 1) / len(all_jobs),
                                       text=f"読み取り中... {idx+1}/{len(all_jobs)}件")
                     try:
-                        data   = ocr_jisseki(img_bytes, mime, api_key)
-                        is_dup = check_duplicate(data)
-                        save_meisai(data)
-                        results.append({"status": "overwrite" if is_dup else "ok",
-                                        "label": label, "data": data})
+                        data = ocr_jisseki(img_bytes, mime, api_key)
+                        jukyu = str(data["受給者証番号"])
+                        if jukyu in master_jukyus:
+                            is_dup = check_duplicate(data)
+                            save_meisai(data)
+                            ocr_done.append({"status": "overwrite" if is_dup else "ok",
+                                             "label": label, "data": data})
+                        else:
+                            ocr_pending.append({"label": label, "data": data})
                     except Exception as e:
-                        results.append({"status": "err", "label": label, "error": str(e)})
+                        ocr_err.append({"label": label, "error": str(e)})
                 progress.empty()
+                st.session_state["ocr_done"]    = ocr_done
+                st.session_state["ocr_pending"] = ocr_pending
+                st.session_state["ocr_err"]     = ocr_err
+                st.rerun()
 
-                ok_list  = [r for r in results if r["status"] in ("ok", "overwrite")]
-                err_list = [r for r in results if r["status"] == "err"]
-                for r in ok_list:
+            # ── OCR結果の表示 ──────────────────────────────
+            ocr_done    = st.session_state.get("ocr_done", [])
+            ocr_pending = st.session_state.get("ocr_pending", [])
+            ocr_err     = st.session_state.get("ocr_err", [])
+
+            for r in ocr_done:
+                d = r["data"]
+                fn = card_overwrite if r["status"] == "overwrite" else card_ok
+                fn(d["児童名"], d["受給者証番号"], d["サービス提供年月"],
+                   d["算定日数"], d["送迎往合計"], d["送迎復合計"])
+            for r in ocr_err:
+                card_err(r["label"], r["error"])
+
+            if ocr_done:
+                ow = sum(1 for r in ocr_done if r["status"] == "overwrite")
+                msg = f"{len(ocr_done)}件を保存しました" + (f"（うち{ow}件は上書き）" if ow else "")
+                st.success(msg)
+
+            # ── 未登録児童の確認 ───────────────────────────
+            if ocr_pending:
+                st.markdown(f"""
+                    <div style="background:{_C["ow_bg"]};border-radius:16px;padding:16px 20px;
+                         margin:16px 0;border-left:3px solid {_C["warn"]};">
+                      <div style="font-size:15px;font-weight:700;color:{_C["warn"]};">
+                        ⚠️ マスター未登録のお子さんが {len(ocr_pending)} 名います
+                      </div>
+                      <div style="font-size:13px;color:{_C["txt2"]};margin-top:5px;">
+                        読み取り間違いの可能性があります。内容を確認して「追加して保存」か「無視」を選んでください。
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                remove_idx = []
+                for i, r in enumerate(ocr_pending):
                     d = r["data"]
-                    fn = card_overwrite if r["status"] == "overwrite" else card_ok
-                    fn(d["児童名"], d["受給者証番号"], d["サービス提供年月"],
-                       d["算定日数"], d["送迎往合計"], d["送迎復合計"])
-                for r in err_list:
-                    card_err(r["label"], r["error"])
+                    st.markdown(f"""
+                        <div style="background:{_C["card"]};border-radius:16px;padding:17px 22px;
+                             margin:8px 0;box-shadow:0 2px 8px rgba(0,0,0,0.05);
+                             border:1px solid {_C["border"]};border-left:3px solid {_C["warn"]};">
+                          <div style="font-size:15px;font-weight:600;color:{_C["txt"]};">{d["児童名"]}</div>
+                          <div style="font-size:13px;color:{_C["txt2"]};margin-top:5px;">
+                            受給者証 {d["受給者証番号"]}　·
+                            {d["サービス提供年月"][:4]}年{d["サービス提供年月"][4:]}月　·
+                            <b style="color:{_C["txt"]};">{d["算定日数"]}日</b>
+                            　·　送迎 往{d["送迎往合計"]} / 復{d["送迎復合計"]}
+                          </div>
+                        </div>""", unsafe_allow_html=True)
+                    col_add, col_ign = st.columns(2)
+                    with col_add:
+                        if st.button("追加して保存", key=f"pend_add_{i}", type="primary",
+                                     use_container_width=True):
+                            save_meisai(d)
+                            upsert_master(str(d["受給者証番号"]), d["児童名"])
+                            remove_idx.append(i)
+                    with col_ign:
+                        if st.button("無視する", key=f"pend_ign_{i}",
+                                     use_container_width=True):
+                            remove_idx.append(i)
 
-                if ok_list:
-                    ow = sum(1 for r in ok_list if r["status"] == "overwrite")
-                    msg = f"{len(ok_list)}件を保存しました" + (f"（うち{ow}件は上書き）" if ow else "")
-                    st.success(msg)
-                    next_step_hint("「② 内容確認」タブで読み取り結果を確認してください")
+                if remove_idx:
+                    st.session_state["ocr_pending"] = [
+                        r for j, r in enumerate(ocr_pending) if j not in remove_idx
+                    ]
+                    st.rerun()
+
+            if ocr_done or ocr_pending:
+                next_step_hint("「② 内容確認」タブで読み取り結果を確認してください")
 
         st.divider()
         with st.expander("手動で1件だけ入力する場合はこちら"):
@@ -973,7 +1216,8 @@ def render(settings):
                 up_meisai = st.file_uploader("明細書PDF", type=["pdf"], key="master_meisai_pdf")
                 if up_meisai and st.button("取り込む", key="import_meisai", type="primary"):
                     try:
-                        rows = _parse_meisai_pdf_for_master(up_meisai.read())
+                        with st.spinner("AIで読み取り中..."):
+                            rows = _parse_meisai_pdf_for_master(up_meisai.read(), api_key)
                         if rows:
                             added, updated = _merge_into_master(rows)
                             st.success(f"完了：追加 {added}名 / 更新 {updated}名")
